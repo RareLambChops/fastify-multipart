@@ -41,11 +41,20 @@ fastify.post('/', async function (req, reply) {
   const data = await req.file()
 
   data.file // stream
-  data.fields // other parsed parts
   data.fieldname
   data.filename
   data.encoding
   data.mimetype
+  data.fields // other parsed parts
+  /*
+    Note: To access other parsed parts, the FormData Objects need to be in the correct order from the client side.
+    Client side example:
+      const formData = new FormData();
+      formData.append("username", "abc124"); // 2nd
+      formData.append("userfile", fileInputElement.files[0]); // 1st
+    Use multipartIterator() to iterate over fields and files if this is not possible.
+  */
+  
 
   // to accumulate the file in memory! Be careful!
   //
