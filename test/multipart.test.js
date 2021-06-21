@@ -10,6 +10,7 @@ const path = require('path')
 const fs = require('fs')
 const concat = require('concat-stream')
 const stream = require('stream')
+const { once } = require('events')
 const pump = util.promisify(stream.pipeline)
 const sendToWormhole = require('stream-wormhole')
 
@@ -19,12 +20,12 @@ test('should parse forms', function (t) {
   t.plan(8)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
-    for await (const part of req.multipartIterator()) {
+    for await (const part of req.parts()) {
       if (part.file) {
         t.equal(part.fieldname, 'upload')
         t.equal(part.filename, 'README.md')
@@ -48,7 +49,7 @@ test('should parse forms', function (t) {
   fastify.listen(0, async function () {
     // request
     const form = new FormData()
-    var opts = {
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -82,12 +83,12 @@ test('should respond when all files are processed', function (t) {
   t.plan(4)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
-    const parts = await req.files()
+    const parts = req.files()
     for await (const part of parts) {
       t.ok(part.file)
       await sendToWormhole(part.file)
@@ -131,12 +132,12 @@ test('should group parts with the same name to an array', function (t) {
   t.plan(15)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
-    const parts = await req.multipartIterator()
+    const parts = req.parts()
     for await (const part of parts) {
       t.ok(part)
       if (Array.isArray(part.fields.upload)) {
@@ -190,7 +191,7 @@ test('should error if it is not multipart', function (t) {
   t.plan(3)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
@@ -201,14 +202,14 @@ test('should error if it is not multipart', function (t) {
       await req.file()
       reply.code(200).send()
     } catch (error) {
-      t.true(error instanceof fastify.multipartErrors.InvalidMultipartContentTypeError)
+      t.ok(error instanceof fastify.multipartErrors.InvalidMultipartContentTypeError)
       reply.code(500).send()
     }
   })
 
   fastify.listen(0, function () {
     // request
-    var opts = {
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -230,7 +231,7 @@ test('should error if boundary is empty', function (t) {
   t.plan(3)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
@@ -276,20 +277,20 @@ test('should throw error due to filesLimit (The max number of file fields (Defau
   t.plan(4)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
     try {
-      const parts = await req.files({ limits: { files: 1 } })
+      const parts = req.files({ limits: { files: 1 } })
       for await (const part of parts) {
         t.ok(part.file)
         await sendToWormhole(part.file)
       }
       reply.code(200).send()
     } catch (error) {
-      t.true(error instanceof fastify.multipartErrors.FilesLimitError)
+      t.ok(error instanceof fastify.multipartErrors.FilesLimitError)
       reply.code(500).send()
     }
   })
@@ -328,20 +329,20 @@ test('should be able to configure limits globally with plugin register options',
   t.plan(4)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart, { limits: { files: 1 } })
 
   fastify.post('/', async function (req, reply) {
     try {
-      const parts = await req.files()
+      const parts = req.files()
       for await (const part of parts) {
         t.ok(part.file)
         await sendToWormhole(part.file)
       }
       reply.code(200).send()
     } catch (error) {
-      t.true(error instanceof fastify.multipartErrors.FilesLimitError)
+      t.ok(error instanceof fastify.multipartErrors.FilesLimitError)
       reply.code(500).send()
     }
   })
@@ -380,18 +381,18 @@ test('should throw error due to fieldsLimit (Max number of non-file fields (Defa
   t.plan(4)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
     try {
-      for await (const part of req.multipartIterator({ limits: { fields: 1 } })) {
+      for await (const part of req.parts({ limits: { fields: 1 } })) {
         t.ok(part)
       }
       reply.code(200).send()
     } catch (error) {
-      t.true(error instanceof fastify.multipartErrors.FieldsLimitError)
+      t.ok(error instanceof fastify.multipartErrors.FieldsLimitError)
       reply.code(500).send()
     }
   })
@@ -430,18 +431,18 @@ test('should throw error due to partsLimit (The max number of parts (fields + fi
   t.plan(4)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
   fastify.post('/', async function (req, reply) {
     try {
-      for await (const part of req.multipartIterator({ limits: { parts: 1 } })) {
+      for await (const part of req.parts({ limits: { parts: 1 } })) {
         t.ok(part)
       }
       reply.code(200).send()
     } catch (error) {
-      t.true(error instanceof fastify.multipartErrors.PartsLimitError)
+      t.ok(error instanceof fastify.multipartErrors.PartsLimitError)
       reply.code(500).send()
     }
   })
@@ -474,4 +475,178 @@ test('should throw error due to partsLimit (The max number of parts (fields + fi
       t.error(error, 'formData request pump: no err')
     }
   })
+})
+
+test('should throw error due to file size limit exceed (Default: true)', function (t) {
+  t.plan(4)
+
+  const fastify = Fastify()
+  t.teardown(fastify.close.bind(fastify))
+
+  fastify.register(multipart, { limits: { fileSize: 1 } })
+
+  fastify.post('/', async function (req, reply) {
+    try {
+      const parts = req.files()
+      for await (const part of parts) {
+        t.ok(part.file)
+        await sendToWormhole(part.file)
+      }
+      reply.code(200).send()
+    } catch (error) {
+      t.ok(error instanceof fastify.multipartErrors.RequestFileTooLargeError)
+      reply.code(500).send()
+    }
+  })
+
+  fastify.listen(0, async function () {
+    // request
+    const form = new FormData()
+    const opts = {
+      protocol: 'http:',
+      hostname: 'localhost',
+      port: fastify.server.address().port,
+      path: '/',
+      headers: form.getHeaders(),
+      method: 'POST'
+    }
+
+    const req = http.request(opts, (res) => {
+      t.equal(res.statusCode, 500)
+      res.on('end', () => {
+        t.pass('res ended successfully')
+      })
+    })
+    form.append('upload', fs.createReadStream(filePath))
+    form.append('upload2', fs.createReadStream(filePath))
+
+    try {
+      await pump(form, req)
+    } catch (error) {
+      t.error(error, 'formData request pump: no err')
+    }
+  })
+})
+
+test('should not throw error due to file size limit exceed - files setting (Default: true)', function (t) {
+  t.plan(3)
+
+  const fastify = Fastify()
+  t.teardown(fastify.close.bind(fastify))
+
+  fastify.register(multipart, { throwFileSizeLimit: false })
+
+  fastify.post('/', async function (req, reply) {
+    const parts = req.files({ limits: { fileSize: 1 } })
+    for await (const part of parts) {
+      t.ok(part.file)
+      await sendToWormhole(part.file)
+    }
+    reply.code(200).send()
+  })
+
+  fastify.listen(0, async function () {
+    // request
+    const form = new FormData()
+    const opts = {
+      protocol: 'http:',
+      hostname: 'localhost',
+      port: fastify.server.address().port,
+      path: '/',
+      headers: form.getHeaders(),
+      method: 'POST'
+    }
+
+    const req = http.request(opts, (res) => {
+      t.equal(res.statusCode, 200)
+      res.on('end', () => {
+        t.pass('res ended successfully')
+      })
+    })
+    form.append('upload', fs.createReadStream(filePath))
+    form.append('upload2', fs.createReadStream(filePath))
+
+    try {
+      await pump(form, req)
+    } catch (error) {
+      t.error(error, 'formData request pump: no err')
+    }
+  })
+})
+
+test('should not miss fields if part handler takes much time than formdata parsing', async function (t) {
+  t.plan(11)
+
+  const original = fs.readFileSync(filePath, 'utf8')
+  const immediate = util.promisify(setImmediate)
+
+  const fastify = Fastify()
+  t.teardown(fastify.close.bind(fastify))
+
+  fastify.register(multipart)
+
+  fastify.post('/', async function (req, reply) {
+    const recvField = {
+      upload: false,
+      hello: false,
+      willbe: false
+    }
+
+    for await (const part of req.parts()) {
+      if (part.file) {
+        t.equal(part.fieldname, 'upload')
+        t.equal(part.filename, 'README.md')
+        t.equal(part.encoding, '7bit')
+        t.equal(part.mimetype, 'text/markdown')
+        t.ok(part.fields.upload)
+
+        await pump(
+          part.file,
+          concat(function (buf) {
+            t.equal(buf.toString(), original)
+          })
+        )
+        await immediate()
+      }
+
+      recvField[part.fieldname] = true
+    }
+
+    t.equal(recvField.upload, true)
+    t.equal(recvField.hello, true)
+    t.equal(recvField.willbe, true)
+
+    reply.code(200).send()
+  })
+
+  await fastify.listen(0)
+
+  // request
+  const form = new FormData()
+  const opts = {
+    protocol: 'http:',
+    hostname: 'localhost',
+    port: fastify.server.address().port,
+    path: '/',
+    headers: form.getHeaders(),
+    method: 'POST'
+  }
+
+  const req = http.request(opts)
+  const rs = fs.createReadStream(filePath)
+  form.append('upload', rs)
+  form.append('hello', 'world')
+  form.append('willbe', 'dropped')
+
+  try {
+    await pump(form, req)
+  } catch (error) {
+    t.error(error, 'formData request pump: no err')
+  }
+
+  const [res] = await once(req, 'response')
+  t.equal(res.statusCode, 200)
+  res.resume()
+  await once(res, 'end')
+  t.pass('res ended successfully')
 })

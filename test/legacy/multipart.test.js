@@ -18,7 +18,7 @@ test('should parse forms', { skip: process.platform === 'win32' }, function (t) 
   t.plan(14)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart, { limits: { fields: 1 } })
 
@@ -31,8 +31,8 @@ test('should parse forms', { skip: process.platform === 'win32' }, function (t) 
     })
 
     mp.on('field', function (name, value) {
-      t.notEqual(name, 'willbe', 'Busboy fields limit ignored')
-      t.notEqual(value, 'dropped', 'Busboy fields limit ignored')
+      t.not(name, 'willbe', 'Busboy fields limit ignored')
+      t.not(value, 'dropped', 'Busboy fields limit ignored')
       t.equal(name, 'hello')
       t.equal(value, 'world')
     })
@@ -43,7 +43,7 @@ test('should parse forms', { skip: process.platform === 'win32' }, function (t) 
       t.equal(encoding, '7bit')
       t.equal(mimetype, 'text/markdown')
       file.on('fieldsLimit', () => t.ok('field limit reached'))
-      var original = fs.readFileSync(filePath, 'utf8')
+      const original = fs.readFileSync(filePath, 'utf8')
       file.pipe(concat(function (buf) {
         t.equal(buf.toString(), original)
       }))
@@ -52,8 +52,8 @@ test('should parse forms', { skip: process.platform === 'win32' }, function (t) 
 
   fastify.listen(0, function () {
     // request
-    var form = new FormData()
-    var opts = {
+    const form = new FormData()
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -62,14 +62,14 @@ test('should parse forms', { skip: process.platform === 'win32' }, function (t) 
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 200)
       res.resume()
       res.on('end', () => {
         t.pass('res ended successfully')
       })
     })
-    var rs = fs.createReadStream(filePath)
+    const rs = fs.createReadStream(filePath)
     form.append('upload', rs)
     form.append('hello', 'world')
     form.append('willbe', 'dropped')
@@ -83,7 +83,7 @@ test('should call finished when both files are pumped', { skip: process.platform
   t.plan(10)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart)
 
@@ -112,8 +112,8 @@ test('should call finished when both files are pumped', { skip: process.platform
 
   fastify.listen(0, function () {
     // request
-    var form = new FormData()
-    var opts = {
+    const form = new FormData()
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -122,7 +122,7 @@ test('should call finished when both files are pumped', { skip: process.platform
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 200)
       res.resume()
       res.on('end', () => {
@@ -139,12 +139,80 @@ test('should call finished when both files are pumped', { skip: process.platform
   })
 })
 
+test('should call finished if one of the streams closes prematurely', { skip: process.platform === 'win32' }, function (t) {
+  t.plan(5)
+
+  const fastify = Fastify()
+  t.teardown(fastify.close.bind(fastify))
+
+  fastify.register(multipart)
+
+  fastify.post('/', function (req, reply) {
+    let fileCount = 0
+    t.ok(req.isMultipart())
+
+    req.multipart(handler, function () {
+      t.equal(fileCount, 1)
+      reply.code(200).send()
+    })
+
+    function handler (field, file, filename, encoding, mimetype) {
+      const saveTo = path.join(os.tmpdir(), path.basename(filename))
+      eos(file, function () {
+        fileCount++
+      })
+
+      file.on('data', function () {
+        if (fileCount === 0) {
+          this.destroy()
+        }
+      })
+
+      pump(file, fs.createWriteStream(saveTo), () => {})
+    }
+  })
+
+  fastify.listen(0, function () {
+    // request
+    const form = new FormData()
+    const opts = {
+      protocol: 'http:',
+      hostname: 'localhost',
+      port: fastify.server.address().port,
+      path: '/',
+      headers: form.getHeaders(),
+      method: 'POST'
+    }
+
+    const stream1 = fs.createReadStream(filePath)
+
+    const req = http.request(opts, (res) => {
+      t.equal(res.statusCode, 200)
+      res.resume()
+      res.on('end', () => {
+        t.pass('res ended successfully')
+      })
+    })
+
+    form.append('upload1', stream1, {
+      filename: 'random-data1'
+    })
+    form.append('upload2', stream1, {
+      filename: 'random-data2'
+    })
+
+    pump(form, req, function (err) {
+      t.error(err, 'client pump: no err')
+    })
+  })
+})
+
 test('should error if it is not multipart', { skip: process.platform === 'win32' }, function (t) {
   t.plan(4)
 
   const fastify = Fastify()
 
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
   fastify.register(multipart)
 
   fastify.post('/', function (req, reply) {
@@ -163,7 +231,7 @@ test('should error if it is not multipart', { skip: process.platform === 'win32'
 
   fastify.listen(0, function () {
     // request
-    var opts = {
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -174,10 +242,92 @@ test('should error if it is not multipart', { skip: process.platform === 'win32'
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 500)
     })
     req.end(JSON.stringify({ hello: 'world' }))
+  })
+})
+
+test('should error if handler is not a function', { skip: process.platform === 'win32' }, function (t) {
+  t.plan(3)
+
+  const fastify = Fastify()
+
+  t.teardown(fastify.close.bind(fastify))
+  fastify.register(multipart)
+
+  fastify.post('/', function (req, reply) {
+    const handler = null
+
+    req.multipart(handler, function (err) {
+      t.ok(err)
+      reply.code(500).send()
+    })
+  })
+
+  fastify.listen(0, function () {
+    // request
+    const form = new FormData()
+    const opts = {
+      protocol: 'http:',
+      hostname: 'localhost',
+      port: fastify.server.address().port,
+      path: '/',
+      headers: form.getHeaders(),
+      method: 'POST'
+    }
+
+    const req = http.request(opts, (res) => {
+      res.resume()
+      res.on('end', () => {
+        t.equal(res.statusCode, 500)
+        t.pass('res ended successfully')
+      })
+    })
+    pump(form, req, function (err) {
+      t.error(err, 'client pump: no err')
+    })
+  })
+})
+
+test('should error if callback is not a function', { skip: process.platform === 'win32' }, function (t) {
+  t.plan(3)
+
+  const fastify = Fastify()
+
+  t.teardown(fastify.close.bind(fastify))
+  fastify.register(multipart)
+
+  fastify.post('/', function (req) {
+    const callback = null
+    req.multipart(handler, callback)
+
+    function handler () {}
+  })
+
+  fastify.listen(0, function () {
+    // request
+    const form = new FormData()
+    const opts = {
+      protocol: 'http:',
+      hostname: 'localhost',
+      port: fastify.server.address().port,
+      path: '/',
+      headers: form.getHeaders(),
+      method: 'POST'
+    }
+
+    const req = http.request(opts, (res) => {
+      res.resume()
+      res.on('end', () => {
+        t.equal(res.statusCode, 500)
+        t.pass('res ended successfully')
+      })
+    })
+    pump(form, req, function (err) {
+      t.error(err, 'client pump: no err')
+    })
   })
 })
 
@@ -186,7 +336,7 @@ test('should error if it is invalid multipart', { skip: process.platform === 'wi
 
   const fastify = Fastify()
 
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
   fastify.register(multipart)
 
   fastify.post('/', function (req, reply) {
@@ -205,8 +355,8 @@ test('should error if it is invalid multipart', { skip: process.platform === 'wi
 
   fastify.listen(0, function () {
     // request
-    var form = new FormData()
-    var opts = {
+    const form = new FormData()
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -217,7 +367,7 @@ test('should error if it is invalid multipart', { skip: process.platform === 'wi
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 500)
     })
     pump(form, req, function (err) {
@@ -230,7 +380,7 @@ test('should override options', { skip: process.platform === 'win32' }, function
   t.plan(5)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart, { limits: { fileSize: 1 } })
 
@@ -249,8 +399,8 @@ test('should override options', { skip: process.platform === 'win32' }, function
 
   fastify.listen(0, function () {
     // request
-    var form = new FormData()
-    var opts = {
+    const form = new FormData()
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -259,7 +409,7 @@ test('should override options', { skip: process.platform === 'win32' }, function
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 200)
       res.resume()
       res.on('end', () => {
@@ -267,7 +417,7 @@ test('should override options', { skip: process.platform === 'win32' }, function
       })
     })
 
-    var rs = fs.createReadStream(filePath)
+    const rs = fs.createReadStream(filePath)
     form.append('upload', rs)
     pump(form, req, function (err) {
       t.error(err, 'client pump: no err')
@@ -279,7 +429,7 @@ test('should not allow __proto__', { skip: process.platform === 'win32' }, funct
   t.plan(5)
 
   const fastify = Fastify()
-  t.tearDown(fastify.close.bind(fastify))
+  t.teardown(fastify.close.bind(fastify))
 
   fastify.register(multipart, { limits: { fields: 1 } })
 
@@ -287,7 +437,7 @@ test('should not allow __proto__', { skip: process.platform === 'win32' }, funct
     t.ok(req.isMultipart())
 
     const mp = req.multipart(handler, function (err) {
-      t.is(err.message, '__proto__ is not allowed as field name')
+      t.equal(err.message, '__proto__ is not allowed as field name')
       reply.code(500).send()
     })
 
@@ -302,8 +452,8 @@ test('should not allow __proto__', { skip: process.platform === 'win32' }, funct
 
   fastify.listen(0, function () {
     // request
-    var form = new FormData()
-    var opts = {
+    const form = new FormData()
+    const opts = {
       protocol: 'http:',
       hostname: 'localhost',
       port: fastify.server.address().port,
@@ -312,14 +462,14 @@ test('should not allow __proto__', { skip: process.platform === 'win32' }, funct
       method: 'POST'
     }
 
-    var req = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       t.equal(res.statusCode, 500)
       res.resume()
       res.on('end', () => {
         t.pass('res ended successfully')
       })
     })
-    var rs = fs.createReadStream(filePath)
+    const rs = fs.createReadStream(filePath)
     form.append('__proto__', rs)
     // form.append('hello', 'world')
     // form.append('willbe', 'dropped')

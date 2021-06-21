@@ -99,7 +99,7 @@ function busboy (options) {
   }
 }
 
-function fastifyMultipart (fastify, options = {}, done) {
+function fastifyMultipart (fastify, options, done) {
   if (options.addToBody === true) {
     if (typeof options.sharedSchemaId === 'string') {
       fastify.addSchema({
@@ -133,7 +133,10 @@ function fastifyMultipart (fastify, options = {}, done) {
       })
     }
     fastify.addHook('preValidation', async function (req, reply) {
-      for await (const part of req.multipartIterator()) {
+      if (!req.isMultipart()) {
+        return
+      }
+      for await (const part of req.parts()) {
         req.body = part.fields
         if (part.file) {
           if (options.onFile) {
@@ -144,6 +147,11 @@ function fastifyMultipart (fastify, options = {}, done) {
         }
       }
     })
+  }
+
+  let throwFileSizeLimit = true
+  if (typeof options.throwFileSizeLimit === 'boolean') {
+    throwFileSizeLimit = options.throwFileSizeLimit
   }
 
   const PartsLimitError = createError('FST_PARTS_LIMIT', 'reach parts limit', 413)
@@ -164,9 +172,11 @@ function fastifyMultipart (fastify, options = {}, done) {
 
   fastify.addContentTypeParser('multipart', setMultipart)
   fastify.decorateRequest(kMultipartHandler, handleMultipart)
-  fastify.decorateRequest('multipartIterator', getMultipartIterator)
+
+  fastify.decorateRequest('parts', getMultipartIterator)
+
   fastify.decorateRequest('isMultipart', isMultipart)
-  fastify.decorateRequest('tmpUploads', [])
+  fastify.decorateRequest('tmpUploads', null)
 
   // legacy
   fastify.decorateRequest('multipart', handleLegacyMultipartApi)
@@ -215,10 +225,8 @@ function fastifyMultipart (fastify, options = {}, done) {
 
     const busboyOptions = deepmerge.all([{ headers: req.headers }, options || {}, opts || {}])
     const stream = busboy(busboyOptions)
-    var completed = false
-    var files = 0
-    var count = 0
-    var callDoneOnNextEos = false
+    let completed = false
+    let files = 0
 
     req.on('error', function (err) {
       stream.destroy()
@@ -230,11 +238,9 @@ function fastifyMultipart (fastify, options = {}, done) {
 
     stream.on('finish', function () {
       log.debug('finished receiving stream, total %d files', files)
-      if (!completed && count === files) {
+      if (!completed) {
         completed = true
         setImmediate(done)
-      } else {
-        callDoneOnNextEos = true
       }
     })
 
@@ -260,17 +266,6 @@ function fastifyMultipart (fastify, options = {}, done) {
       if (err) {
         completed = true
         done(err)
-        return
-      }
-
-      if (completed) {
-        return
-      }
-
-      ++count
-      if (callDoneOnNextEos && count === files) {
-        completed = true
-        done()
       }
     }
 
@@ -284,26 +279,33 @@ function fastifyMultipart (fastify, options = {}, done) {
 
     this.log.debug('starting multipart parsing')
 
-    let worker
-    let lastValue
+    let values = []
+    let pendingHandler = null
 
     // only one file / field can be processed at a time
     // "null" will close the consumer side
     const ch = (val) => {
-      if (typeof val === 'function') {
-        worker = val
+      if (pendingHandler) {
+        pendingHandler(val)
+        pendingHandler = null
       } else {
-        lastValue = val
-      }
-      if (worker && lastValue !== undefined) {
-        worker(lastValue)
-        worker = undefined
-        lastValue = undefined
+        values.push(val)
       }
     }
+
+    const handle = (handler) => {
+      if (values.length > 0) {
+        const value = values[0]
+        values = values.slice(1)
+        handler(value)
+      } else {
+        pendingHandler = handler
+      }
+    }
+
     const parts = () => {
       return new Promise((resolve, reject) => {
-        ch((val) => {
+        handle((val) => {
           if (val instanceof Error) return reject(val)
           resolve(val)
         })
@@ -328,6 +330,7 @@ function fastifyMultipart (fastify, options = {}, done) {
       .on('file', onFile)
       .on('close', cleanup)
       .on('error', onEnd)
+      .on('end', onEnd)
       .on('finish', onEnd)
 
     bb.on('partsLimit', function () {
@@ -341,6 +344,11 @@ function fastifyMultipart (fastify, options = {}, done) {
     bb.on('fieldsLimit', function () {
       onError(new FieldsLimitError())
     })
+
+    // TODO: Won't need after https://github.com/mscdex/busboy/pull/237/files
+    if (bb._writableState.autoDestroy) {
+      bb._writableState.autoDestroy = false
+    }
 
     request.pipe(bb)
 
@@ -379,6 +387,10 @@ function fastifyMultipart (fastify, options = {}, done) {
         return
       }
 
+      if (typeof opts.throwFileSizeLimit === 'boolean') {
+        throwFileSizeLimit = opts.throwFileSizeLimit
+      }
+
       const value = {
         fieldname: name,
         filename,
@@ -399,6 +411,15 @@ function fastifyMultipart (fastify, options = {}, done) {
           return this._buf
         }
       }
+
+      if (throwFileSizeLimit) {
+        file.on('limit', function () {
+          const err = new RequestFileTooLargeError()
+          err.part = value
+          onError(err)
+        })
+      }
+
       if (body[name] === undefined) {
         body[name] = value
       } else if (Array.isArray(body[name])) {
@@ -414,68 +435,35 @@ function fastifyMultipart (fastify, options = {}, done) {
       lastError = err
     }
 
-    function onEnd (error) {
+    function onEnd (err) {
       cleanup()
-      bb.removeListener('finish', onEnd)
-      bb.removeListener('error', onEnd)
-      ch(error || lastError)
+
+      ch(err || lastError)
     }
 
     function cleanup () {
-      // keep finish listener to wait all data flushed
-      // keep error listener to wait stream error
-      request.removeListener('close', cleanup)
-      bb.removeListener('field', onField)
-      bb.removeListener('file', onFile)
-      bb.removeListener('close', cleanup)
+      request.unpipe(bb)
     }
 
     return parts
   }
 
-  async function handlePartFile (part, logger) {
-    const file = part.file
-    if (file.truncated) {
-      // ensure that stream is consumed, any error is suppressed
-      await sendToWormhole(file)
-      // throw on consumer side
-      return Promise.reject(new RequestFileTooLargeError())
-    }
-
-    file.once('limit', () => {
-      const err = new RequestFileTooLargeError()
-
-      if (file.listenerCount('error') > 0) {
-        file.emit('error', err)
-        logger.warn(err)
-      } else {
-        logger.error(err)
-        // ignore next error event
-        file.on('error', (err) => {
-          logger.error('fileLimit: suppressed file stream error, %s', err.messsage)
-        })
-      }
-      // ignore all data
-      file.resume()
-    })
-
-    return part
-  }
-
   async function saveRequestFiles (options) {
     const requestFiles = []
+    const tmpdir = (options && options.tmpdir) || os.tmpdir()
 
     const files = await this.files(options)
+    this.tmpUploads = []
     for await (const file of files) {
-      const filepath = path.join(os.tmpdir(), toID() + path.extname(file.filename))
+      const filepath = path.join(tmpdir, toID() + path.extname(file.filename))
       const target = createWriteStream(filepath)
       try {
         await pump(file.file, target)
-        this.tmpUploads.push(filepath)
         requestFiles.push({ ...file, filepath })
-      } catch (error) {
-        this.log.error(error)
-        await unlink(filepath)
+        this.tmpUploads.push(filepath)
+      } catch (err) {
+        this.log.error({ err }, 'save request file')
+        throw err
       }
     }
 
@@ -483,22 +471,28 @@ function fastifyMultipart (fastify, options = {}, done) {
   }
 
   async function cleanRequestFiles () {
+    if (!this.tmpUploads) {
+      return
+    }
     for (const filepath of this.tmpUploads) {
       try {
         await unlink(filepath)
       } catch (error) {
-        this.log.error(error)
+        this.log.error(error, 'could not delete file')
       }
     }
   }
 
   async function getMultipartFile (options) {
     const parts = this[kMultipartHandler](options)
-
     let part
     while ((part = await parts()) != null) {
       if (part.file) {
-        return handlePartFile(part, this.log)
+        // part.file.truncated is true when a configured file size limit is reached
+        if (part.file.truncated && throwFileSizeLimit) {
+          throw new RequestFileTooLargeError()
+        }
+        return part
       }
     }
   }
@@ -509,7 +503,6 @@ function fastifyMultipart (fastify, options = {}, done) {
     let part
     while ((part = await parts()) != null) {
       if (part.file) {
-        part = await handlePartFile(part, this.log)
         yield part
       }
     }

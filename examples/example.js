@@ -20,8 +20,18 @@ fastify.post('/upload/stream/single', async function (req, reply) {
   reply.send()
 })
 
+fastify.post('/upload/stream/single-buf', async function (req, reply) {
+  for await (const part of req.parts()) {
+    if (part.file) {
+      await part.toBuffer()
+      console.log(part)
+    }
+  }
+  reply.send()
+})
+
 fastify.post('/upload/stream/files', async function (req, reply) {
-  const parts = await req.files()
+  const parts = req.files()
   for await (const part of parts) {
     await pump(part.file, fs.createWriteStream(part.filename))
   }
@@ -29,7 +39,7 @@ fastify.post('/upload/stream/files', async function (req, reply) {
 })
 
 fastify.post('/upload/raw/any', async function (req, reply) {
-  const parts = await req.multipartIterator()
+  const parts = req.parts()
   for await (const part of parts) {
     if (part.file) {
       await pump(part.file, fs.createWriteStream(part.filename))
